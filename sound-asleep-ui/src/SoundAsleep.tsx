@@ -1,11 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
@@ -21,24 +15,13 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
-import {
-  Bluetooth,
-  Brain,
-  Headphones,
-  Play,
-  Activity,
-  Settings,
-  Timer,
-  Battery,
-  Waves,
-} from "lucide-react";
+import { Bluetooth, Brain, Headphones, Play, Activity, Settings, Timer, Battery, Waves } from "lucide-react";
 
 // Helpers
 function useStreamingData(points = 256, hz = 25) {
   const [data, setData] = useState(() =>
     Array.from({ length: points }, (_, i) => ({ t: i, v: 0 }))
   );
-
   useEffect(() => {
     const id = setInterval(() => {
       setData((prev) => {
@@ -54,11 +37,10 @@ function useStreamingData(points = 256, hz = 25) {
     }, 1000 / hz);
     return () => clearInterval(id);
   }, [hz]);
-
   return data;
 }
 
-function ImpedanceBadge({ value }) {
+function ImpedanceBadge({ value }: { value: number }) {
   const color =
     value < 25 ? "bg-emerald-600" : value < 60 ? "bg-amber-500" : "bg-rose-600";
   return (
@@ -68,7 +50,7 @@ function ImpedanceBadge({ value }) {
   );
 }
 
-// Main app contents
+// Main UI component
 export default function SoundAsleepUI() {
   const eeg = useStreamingData(256, 30);
   const [paired, setPaired] = useState(false);
@@ -79,21 +61,55 @@ export default function SoundAsleepUI() {
   const [algorithm, setAlgorithm] = useState("YASA");
   const [latencyMs, setLatencyMs] = useState(120);
   const [battery, setBattery] = useState(78);
-  const [log, setLog] = useState([
+  const [log, setLog] = useState<string[]>([
     "App initialized.",
     "Awaiting device pairing…",
   ]);
 
-  const addLog = (m) =>
-    setLog((prev) =>
-      [new Date().toLocaleTimeString() + "  " + m, ...prev].slice(0, 40)
-    );
+  // Pink noise audio reference
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const handlePair = () => {
-    setPaired(true);
-    addLog("Headband paired via BLE.");
+  const addLog = (m: string) =>
+    setLog((prev) => [new Date().toLocaleTimeString() + "  " + m, ...prev].slice(0, 40));
+
+  // Bluetooth pairing logic
+  const handlePair = async () => {
+    const navAny = navigator as any;
+
+    if (!navAny.bluetooth) {
+      addLog(
+        "Web Bluetooth not supported. Pair your speaker via macOS Bluetooth settings, then ensure audio output is set to it."
+      );
+      setPaired(true);
+      return;
+    }
+
+    try {
+      addLog("Requesting Bluetooth device…");
+      const device: BluetoothDevice = await navAny.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [],
+      });
+
+      addLog(`Selected device: ${device.name ?? "Unnamed device"}. Connecting…`);
+
+      if (device.gatt) {
+        await device.gatt.connect();
+        addLog("Bluetooth GATT connection established.");
+      } else {
+        addLog("Device has no GATT server; macOS will handle audio routing.");
+      }
+
+      setPaired(true);
+      addLog("Device paired. Ensure macOS Sound output is set to your BT speaker.");
+
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog("Bluetooth pairing failed or cancelled: " + msg);
+    }
   };
 
+  // Calibrate latency
   const handleCalibrate = () => {
     const est = Math.max(
       80,
@@ -103,10 +119,34 @@ export default function SoundAsleepUI() {
     addLog(`Audio latency calibrated → ${est} ms`);
   };
 
-  const triggerTestBurst = () => {
+  // Play pink noise file
+  const triggerTestBurst = async () => {
     addLog("Pink-noise test burst requested.");
+
+    if (!audioRef.current) {
+      addLog("Pink-noise audio not loaded.");
+      return;
+    }
+
+    try {
+      // Convert slider dB to normalized gain
+      const normalized = Math.min(
+        1,
+        Math.max(0, (volume[0] - 30) / (80 - 30))
+      );
+      audioRef.current.volume = normalized;
+
+      audioRef.current.currentTime = 0;
+      await audioRef.current.play();
+      addLog("Pink-noise playback started (macOS will route audio to BT speaker).");
+    } catch (err) {
+      addLog("Audio playback failed: " + (err as Error).message);
+      return;
+    }
+
     setTimeout(
-      () => addLog("Pink-noise playback ACK (Δt=" + latencyMs + " ms)."),
+      () =>
+        addLog("Pink-noise playback ACK (Δt=" + latencyMs + " ms)."),
       latencyMs
     );
   };
@@ -119,6 +159,15 @@ export default function SoundAsleepUI() {
   return (
     <TooltipProvider>
       <div className="min-h-screen w-full bg-slate-50 text-slate-900 p-6">
+
+        {/* Pink-noise audio file from public/pink-noise.mp3 */}
+        <audio
+          ref={audioRef}
+          src="/pink-noise.mp3"
+          preload="auto"
+          style={{ display: "none" }}
+        />
+
         <header className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Brain className="h-8 w-8" />
@@ -143,7 +192,10 @@ export default function SoundAsleepUI() {
                 Pair headband, pick algorithm, and control the session.
               </CardDescription>
             </CardHeader>
+
             <CardContent className="space-y-4">
+
+              {/* Pairing Box */}
               <div className="flex items-center justify-between rounded-2xl border p-3">
                 <div>
                   <div className="font-medium">EEG Headband</div>
@@ -151,6 +203,7 @@ export default function SoundAsleepUI() {
                     Status: {paired ? "Connected" : "Not connected"}
                   </div>
                 </div>
+
                 {paired ? (
                   <Badge className="bg-emerald-600">Connected</Badge>
                 ) : (
@@ -161,19 +214,18 @@ export default function SoundAsleepUI() {
                 )}
               </div>
 
+              {/* Algorithm & Mock Mode */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-2xl border p-3">
                   <div className="mb-1 text-xs text-slate-500">Algorithm</div>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className="w-full justify-between"
-                      >
+                      <Button variant="outline" className="w-full justify-between">
                         {algorithm}
                         <Settings className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
+
                     <DropdownMenuContent className="w-48">
                       <DropdownMenuLabel>Choose</DropdownMenuLabel>
                       <DropdownMenuSeparator />
@@ -183,6 +235,7 @@ export default function SoundAsleepUI() {
                       >
                         YASA (staging + SW)
                       </DropdownMenuCheckboxItem>
+
                       <DropdownMenuCheckboxItem
                         checked={algorithm === "CoSleep"}
                         onCheckedChange={() => setAlgorithm("CoSleep")}
@@ -192,10 +245,9 @@ export default function SoundAsleepUI() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
+
                 <div className="rounded-2xl border p-3">
-                  <div className="mb-1 text-xs text-slate-500">
-                    Mock Demo Mode
-                  </div>
+                  <div className="mb-1 text-xs text-slate-500">Mock Demo Mode</div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Use prerecorded data</span>
                     <Switch checked={mockDemo} onCheckedChange={setMockDemo} />
@@ -203,104 +255,73 @@ export default function SoundAsleepUI() {
                 </div>
               </div>
 
+              {/* Stimulation Controls */}
               <div className="rounded-2xl border p-3 space-y-3">
+
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-medium flex items-center gap-2">
                     <Headphones className="h-4 w-4" />
                     Stimulation
                   </div>
-                  <Switch
-                    checked={stimulationOn}
-                    onCheckedChange={setStimulationOn}
-                  />
+                  <Switch checked={stimulationOn} onCheckedChange={setStimulationOn} />
                 </div>
+
                 <div>
-                  <div className="mb-1 text-xs text-slate-500">
-                    Volume (target 55 dB)
-                  </div>
-                  <Slider
-                    value={volume}
-                    onValueChange={setVolume}
-                    min={30}
-                    max={80}
-                    step={1}
-                  />
-                  <div className="text-xs text-slate-500 mt-1">
-                    {volume[0]} dB
-                  </div>
+                  <div className="mb-1 text-xs text-slate-500">Volume (target 55 dB)</div>
+                  <Slider value={volume} onValueChange={setVolume} min={30} max={80} step={1} />
+                  <div className="text-xs text-slate-500 mt-1">{volume[0]} dB</div>
                 </div>
+
                 <div>
-                  <div className="mb-1 text-xs text-slate-500">
-                    Slow-wave threshold
-                  </div>
-                  <Slider
-                    value={threshold}
-                    onValueChange={setThreshold}
-                    min={40}
-                    max={90}
-                    step={1}
-                  />
-                  <div className="text-xs text-slate-500 mt-1">
-                    z-score ≥ {threshold[0]}
-                  </div>
+                  <div className="mb-1 text-xs text-slate-500">Slow-wave threshold</div>
+                  <Slider value={threshold} onValueChange={setThreshold} min={40} max={90} step={1} />
+                  <div className="text-xs text-slate-500 mt-1">z-score ≥ {threshold[0]}</div>
                 </div>
+
                 <div className="flex gap-2">
                   <Button onClick={triggerTestBurst} className="flex-1">
                     <Play className="mr-2 h-4 w-4" />
                     Pink-noise test
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleCalibrate}
-                    className="flex-1"
-                  >
+
+                  <Button variant="outline" onClick={handleCalibrate} className="flex-1">
                     <Timer className="mr-2 h-4 w-4" />
                     Calibrate latency
                   </Button>
                 </div>
+
                 <div className="text-xs text-slate-600">
-                  Latency estimate:{" "}
-                  <span className="font-medium">{latencyMs} ms</span>
+                  Latency estimate: <span className="font-medium">{latencyMs} ms</span>
                 </div>
+
               </div>
             </CardContent>
           </Card>
 
+          {/* Live EEG */}
           <Card className="xl:col-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Activity className="h-5 w-5" />
                 Live EEG (C3-A2)
               </CardTitle>
-              <CardDescription>
-                Band-passed 0.1–40 Hz, 250 Hz sampling (display decimated).
-              </CardDescription>
+              <CardDescription>Band-passed 0.1–40 Hz, 250 Hz sampling.</CardDescription>
             </CardHeader>
+
             <CardContent>
               <div className="h-56 w-full rounded-2xl border p-2 bg-white">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={eeg}
-                    margin={{ left: 12, right: 12, top: 10, bottom: 4 }}
-                  >
+                  <LineChart data={eeg} margin={{ left: 12, right: 12, top: 10, bottom: 4 }}>
                     <XAxis dataKey="t" hide />
                     <YAxis domain={[-100, 100]} hide />
-                    <Line
-                      type="monotone"
-                      dataKey="v"
-                      dot={false}
-                      strokeWidth={2}
-                      isAnimationActive={false}
-                    />
+                    <Line type="monotone" dataKey="v" dot={false} strokeWidth={2} isAnimationActive={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
+
               <div className="mt-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
                 {impedances.map((z, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between rounded-xl border p-2"
-                  >
+                  <div key={i} className="flex items-center justify-between rounded-xl border p-2">
                     <span className="text-xs font-medium">Ch{i + 1}</span>
                     <ImpedanceBadge value={z} />
                   </div>
@@ -310,6 +331,7 @@ export default function SoundAsleepUI() {
           </Card>
         </div>
 
+        {/* Staging / Events */}
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="lg:col-span-2">
             <CardHeader>
@@ -317,55 +339,49 @@ export default function SoundAsleepUI() {
                 <Waves className="h-5 w-5" />
                 Sleep Staging & Events
               </CardTitle>
-              <CardDescription>Summary over the last 10 minutes.</CardDescription>
+              <CardDescription>Summary of last 10 minutes.</CardDescription>
             </CardHeader>
+
             <CardContent>
               <div className="grid grid-cols-3 gap-3">
+
                 <div className="rounded-2xl border p-3">
-                  <div className="text-xs text-slate-500">
-                    Detected slow-waves
-                  </div>
+                  <div className="text-xs text-slate-500">Detected slow-waves</div>
                   <div className="text-2xl font-semibold">
-                    {Math.floor(
-                      threshold[0] / 10 + (stimulationOn ? 5 : 3)
-                    )}
+                    {Math.floor(threshold[0] / 10 + (stimulationOn ? 5 : 3))}
                   </div>
                 </div>
+
                 <div className="rounded-2xl border p-3">
                   <div className="text-xs text-slate-500">Stim bursts issued</div>
-                  <div className="text-2xl font-semibold">
-                    {stimulationOn ? 6 : 0}
-                  </div>
+                  <div className="text-2xl font-semibold">{stimulationOn ? 6 : 0}</div>
                 </div>
+
                 <div className="rounded-2xl border p-3">
                   <div className="text-xs text-slate-500">Avg phase error</div>
-                  <div className="text-2xl font-semibold">
-                    {Math.max(0, latencyMs - 100)} ms
-                  </div>
+                  <div className="text-2xl font-semibold">{Math.max(0, latencyMs - 100)} ms</div>
                 </div>
+
               </div>
+
               <div className="mt-4 rounded-2xl border p-3 text-sm text-slate-600">
-                <p>
-                  Notes: Stimulation auto-pauses on arousal flags; UI shows ACK
-                  within 100 ms of playback start. BLE dropouts up to 200 ms are
-                  tolerated by gap-filling.
-                </p>
+                Notes: Stimulation auto-pauses on arousals. BLE dropouts up to 200 ms tolerated.
               </div>
             </CardContent>
           </Card>
 
+          {/* Event Log */}
           <Card>
             <CardHeader>
               <CardTitle>Event Log</CardTitle>
               <CardDescription>Most recent first.</CardDescription>
             </CardHeader>
+
             <CardContent>
               <div className="h-64 overflow-auto rounded-2xl border bg-white p-3 text-xs">
                 <ul className="space-y-2">
                   {log.map((m, i) => (
-                    <li key={i} className="whitespace-pre-wrap">
-                      {m}
-                    </li>
+                    <li key={i} className="whitespace-pre-wrap">{m}</li>
                   ))}
                 </ul>
               </div>
@@ -376,6 +392,7 @@ export default function SoundAsleepUI() {
         <footer className="mt-6 text-center text-xs text-slate-500">
           UI prototype for ECE 445 – Sound Asleep. React.
         </footer>
+
       </div>
     </TooltipProvider>
   );
