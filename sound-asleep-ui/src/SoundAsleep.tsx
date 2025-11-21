@@ -74,40 +74,74 @@ export default function SoundAsleepUI() {
 
   // Bluetooth pairing logic
   const handlePair = async () => {
-    const navAny = navigator as any;
+  const navAny = navigator as any;
 
-    if (!navAny.bluetooth) {
-      addLog(
-        "Web Bluetooth not supported. Pair your speaker via macOS Bluetooth settings, then ensure audio output is set to it."
-      );
-      setPaired(true);
+  if (!navAny.bluetooth) {
+    addLog(
+      "Web Bluetooth not supported. Pair your speaker via macOS Bluetooth settings, then ensure audio output is set to it."
+    );
+    setPaired(true);
+    return;
+  }
+
+  try {
+    addLog("Requesting Bluetooth device…");
+
+    const device: BluetoothDevice = await navAny.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: ["heart_rate"],  // <-- IMPORTANT
+    });
+
+    addLog(`Selected device: ${device.name ?? "Unnamed device"}. Connecting…`);
+
+    const server = await device.gatt?.connect();
+    if (!server) {
+      addLog("Device has no GATT server.");
       return;
     }
 
-    try {
-      addLog("Requesting Bluetooth device…");
-      const device: BluetoothDevice = await navAny.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [],
-      });
+    addLog("Bluetooth GATT connection established.");
 
-      addLog(`Selected device: ${device.name ?? "Unnamed device"}. Connecting…`);
+    // ---- GET HEART RATE SERVICE (0x180D) ----
+    const service = await server.getPrimaryService("heart_rate");
+    addLog("Heart Rate service obtained.");
 
-      if (device.gatt) {
-        await device.gatt.connect();
-        addLog("Bluetooth GATT connection established.");
-      } else {
-        addLog("Device has no GATT server; macOS will handle audio routing.");
+    // ---- GET HEART RATE MEASUREMENT CHARACTERISTIC (0x2A37) ----
+    const characteristic = await service.getCharacteristic("heart_rate_measurement");
+    addLog("Heart Rate Measurement characteristic obtained.");
+
+    // ---- ENABLE NOTIFICATIONS ----
+    await characteristic.startNotifications();
+    addLog("Subscribed to Heart Rate notifications.");
+
+    characteristic.addEventListener(
+      "characteristicvaluechanged",
+      (event: Event) => {
+        const value = (event.target as any).value as DataView;
+
+        // Parse heart rate value based on Bluetooth SIG specification
+        const flags = value.getUint8(0);
+        let heartRate: number;
+
+        if (flags & 0x01) {
+          heartRate = value.getUint16(1, true);
+        } else {
+          heartRate = value.getUint8(1);
+        }
+
+        console.log("Heart Rate:", heartRate);
+        addLog(`Heart Rate: ${heartRate}`);
       }
+    );
 
-      setPaired(true);
-      addLog("Device paired. Ensure macOS Sound output is set to your BT speaker.");
+    setPaired(true);
+    addLog("Device paired and notifications active.");
 
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addLog("Bluetooth pairing failed or cancelled: " + msg);
-    }
-  };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    addLog("Bluetooth pairing failed or cancelled: " + msg);
+  }
+};
 
   // Calibrate latency
   const handleCalibrate = () => {
