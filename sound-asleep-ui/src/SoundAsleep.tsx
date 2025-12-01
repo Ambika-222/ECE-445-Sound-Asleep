@@ -183,8 +183,11 @@ export default function SoundAsleepUI() {
           // Parse all 8 channels (little-endian int16)
           const channels: number[] = [];
           for (let i = 0; i < 8; i++) {
-            channels.push(value.getInt16(i * 2, true));
-          }
+  const raw = value.getInt16(i * 2, true);   // raw int16 sent ×100
+  const scaled = raw / 100.0;                // convert to float
+  channels.push(scaled);
+}
+
 
           // Update all 8 channel buffers simultaneously
           setEeg((prev) =>
@@ -473,7 +476,7 @@ export default function SoundAsleepUI() {
                           }}
                         >
                           <XAxis dataKey="t" hide />
-                          <YAxis domain={[-2000, 2000]} hide />
+                          <YAxis domain={[-200, 200]} hide />
                           <Line
                             type="monotone"
                             dataKey="v"
